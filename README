@@ -1,0 +1,18 @@
+hybrid-im-gwebqq
+================
+webqq plugin for hybrid IM
+
+Requirements
+============
+libgwebqq
+
+License
+========
+hybrid-im-gwebqq is a free software released under LGPL.
+
+Build and Test
+==============
+$git clone git://github.com/CrazyPandar/hybrid-module-gwebqq.git
+$cd hybrid-module-gwebqq
+$make
+$make install
