@@ -18,7 +18,7 @@
  *   Free Software Foundation, Inc.,                                       *
  *   51 Franklin Street, Suite 500, Boston, MA 02110-1335, USA.            *
  ***************************************************************************/
-
+//#define _DEBUG_
 #include <glib.h>
 #include <g_webqq.h>
 #include "util.h"
@@ -36,12 +36,18 @@
 #define BUDDIES_GROUP_ID    "buddies"
 #define BUDDIES_GROUP_NAME    "Buddies"
 
+static void cb_login(GWQSession* wqs, void* ctx);
+static void cb_logout(GWQSession* wqs, void* ctx);
+static void cb_message_recieved(GWQSession* wqs, QQRecvMsg* msg);
+static void cb_message_sent(GWQSession* wqs, QQSendMsg* msg, gint32 retCode);
+static void cb_users_foreach(GWQSession* wqs, GWQUserInfo* user);
+
 typedef struct {
     GWQSession wqs;
     HybridAccount* hbAc;
     HybridGroup* hbBdGroup;
 }HIGWQSession;
-
+static void HIGWQSessionShowTextMessage(HIGWQSession* hqs, QQRecvMsg* msg);
 HIGWQSession* HIGWQSessionNew(const gchar* qqNum, const gchar* passwd, HybridAccount* hbAc)
 {
     HIGWQSession* ret;
@@ -70,18 +76,187 @@ void HIGWQSessionDestroy(HIGWQSession* hqs)
     g_slice_free(HIGWQSession, hqs);
 }
 
-static void _DisplayMsg(gpointer data, gpointer user_data)
+void cb_categories_foreach(GWQSession* wqs, gint32 idx, const gchar* name)
 {
-    QQMsgContent *qmc;
+    HIGWQSession *hqs;
+    gchar *id;
     
-    qmc = (QQMsgContent*)data;
+    hqs = (HIGWQSession*)GWQSessionGetUserData(wqs);
     
-    if (qmc->type == QQ_MSG_CONTENT_STRING_T) {
-        GWQ_MSG("%s\n", qmc->value.str->str);
+    id = g_strdup_printf("%"G_GINT32_FORMAT, idx);
+    
+    GWQ_DBG("Category idx=%"G_GINT32_FORMAT"\tname=%s\n", idx, name);
+    if (id){
+        hybrid_blist_add_group(hqs->hbAc, id, name);
+        g_free(id);
     }
 }
 
-static void show_text_message(HIGWQSession* hqs, QQRecvMsg* msg)
+static void cb_update_users_info(GWQSession* wqs, void* ctx)
+{
+    HIGWQSession *hqs;
+    
+    hqs = (HIGWQSession*)ctx;
+    
+    hqs->hbBdGroup = hybrid_blist_add_group(hqs->hbAc, BUDDIES_GROUP_ID, BUDDIES_GROUP_NAME);
+    
+    GWQSessionCategoriesForeach(wqs, cb_categories_foreach);
+
+    GWQSessionUsersForeach(wqs, cb_users_foreach);
+    
+    GWQ_DBG("Waiting for message\n");
+    GWQSessionDoPoll(wqs);
+}
+
+static void cb_login(GWQSession* wqs, void* ctx)
+{
+    HIGWQSession *hqs;
+    GWQUserInfo *ui;
+    
+	GWQ_DBG("==>__LoginCallback()\n");
+    hqs = (HIGWQSession*)ctx;
+	if (wqs->st != GWQS_ST_IDLE) {
+		GWQ_MSG("Login failed\n");
+	} else {
+	    GWQ_MSG("Login successfully\n");
+        GWQ_MSG("Fetching buddies' information, please wait......\n");
+        
+        GWQSessionUpdateUsersInfo(&hqs->wqs, cb_update_users_info);
+        
+        ui = GWQSessionGetUserInfo(&hqs->wqs, g_ascii_strtoll(hqs->wqs.num->str, NULL, 10), -1);
+        if (ui) {
+            hybrid_account_set_nickname(hqs->hbAc, ui->nick);
+            GWQUserInfoFree(ui);
+        }
+        
+        hybrid_account_set_connection_status(hqs->hbAc, HYBRID_CONNECTION_CONNECTED);
+        
+	}
+}
+
+static void 
+cb_logout(GWQSession* wqs, void* ctx)
+{
+    HIGWQSession *hqs;
+    
+    hqs = (HIGWQSession*)ctx;
+    if (wqs->st != GWQS_ST_OFFLINE) {
+		GWQ_MSG("Logout failed\n");
+	} else {
+	    GWQ_MSG("Logout success\n");
+	}
+    HIGWQSessionDestroy(hqs);
+}
+
+static void 
+cb_message_sent(GWQSession* wqs, QQSendMsg* msg, gint32 retCode)
+{
+    if (retCode) {
+        GWQ_ERR("Message sent failed\n");
+    } else {
+        GWQ_DBG("Message sent OK\n");
+    }
+    qq_sendmsg_free(msg);
+}
+
+
+static void cb_message_recieved(GWQSession* wqs, QQRecvMsg* msg)
+{
+    HIGWQSession *hqs;
+    
+    GWQ_DBG("==>cb_message_recieved()\n");
+    hqs = (HIGWQSession*)GWQSessionGetUserData(wqs);
+    
+    switch (msg->msg_type) {
+        case MSG_STATUS_CHANGED_T:
+            GWQ_MSG("uin=%"G_GINT64_FORMAT", status:%s\n", msg->uin, msg->status->str);
+            break;
+        case MSG_BUDDY_T:
+            GWQ_DBG("[%"G_GINT64_FORMAT"]\n", msg->from_uin);
+            HIGWQSessionShowTextMessage(hqs, msg);
+        default:
+            GWQ_DBG("Unknown message type received\n");
+            break;
+    }
+}
+
+static void cb_users_foreach(GWQSession* wqs, GWQUserInfo* user)
+{
+    GWQ_DBG("qqNum:%"G_GINT64_FORMAT",\t nick:%s,\tmarkname:%s\n", 
+                user->qqNum, user->nick ,user->markname);
+    GWQSessionUpdateQQNumByUin(wqs, user->uin);
+}
+
+static void cb_update_qq_num_by_uin(GWQSession* wqs, gint64 uin, gint64 qqNum)
+{
+    
+    HIGWQSession *hqs;
+    gchar *uId, *gId;
+    GWQUserInfo *user;
+    
+    hqs = (HIGWQSession*)GWQSessionGetUserData(wqs);
+
+    GWQ_DBG("qqNum:%"G_GINT64_FORMAT",\tuin=%"G_GINT64_FORMAT"\n", qqNum, uin);
+    user = GWQSessionGetUserInfo(wqs, -1, uin);
+    if (user) {
+        GWQ_DBG("category=%"G_GINT32_FORMAT",\tnick:%s,\tmarkname:%s\n", 
+                user->category, user->nick, user->markname);
+        uId = g_strdup_printf("%"G_GINT64_FORMAT, user->qqNum);
+        if (uId) {
+            HybridGroup *grp = NULL;
+            const gchar *dispName = NULL;
+            
+            if (user->markname) {
+                dispName = user->markname;
+            } else if (user->nick) {
+                dispName = user->nick;
+            }
+            
+            if ((gId = g_strdup_printf("%"G_GINT32_FORMAT, user->category))) {
+                grp = hybrid_blist_find_group(hqs->hbAc, gId);
+                g_free(gId);
+            }
+            if (grp) {
+                hybrid_blist_add_buddy(hqs->hbAc, grp, uId, dispName);
+            } else {
+                hybrid_blist_add_buddy(hqs->hbAc, hqs->hbBdGroup, uId, dispName);
+            }
+            g_free(uId);
+        }
+        GWQUserInfoFree(user);
+    }
+    GWQSessionUpdateLongNickByUin(wqs, uin);
+    
+ERR_OUT:
+    return;
+}
+
+static void cb_update_long_nick_by_uin(GWQSession*wqs, gint64 uin, const gchar* lnick)
+{
+    HIGWQSession *hqs;
+    gchar *uId;
+    GWQUserInfo *user;
+    HybridBuddy *buddy = NULL;
+    
+    hqs = (HIGWQSession*)GWQSessionGetUserData(wqs);
+
+    user = GWQSessionGetUserInfo(wqs, -1, uin);
+    if (user) {
+        GWQ_DBG("qqNum=%"G_GINT64_FORMAT",\tlongNick:%s\n", 
+                user->qqNum, user->lnick);
+        uId = g_strdup_printf("%"G_GINT64_FORMAT, user->qqNum);
+        if (uId) {
+            buddy = hybrid_blist_find_buddy(hqs->hbAc, uId);
+            if (buddy) {
+                hybrid_blist_set_buddy_mood(buddy, user->lnick);
+            }
+            g_free(uId);
+        }
+        GWQUserInfoFree(user);
+    }
+}
+
+static void HIGWQSessionShowTextMessage(HIGWQSession* hqs, QQRecvMsg* msg)
 {
     GString *text = g_string_new("");
     QQMsgContent *qmc;
@@ -122,95 +297,6 @@ ERR_OUT:
     return;
 }
 
-static void messageRecieved(GWQSession* wqs, QQRecvMsg* msg)
-{
-    HIGWQSession *hqs;
-    
-    GWQ_DBG("==>messageRecieved()\n");
-    hqs = (HIGWQSession*)GWQSessionGetUserData(wqs);
-    
-    switch (msg->msg_type) {
-        case MSG_STATUS_CHANGED_T:
-            GWQ_MSG("uin=%"G_GINT64_FORMAT", status:%s\n", msg->uin, msg->status->str);
-            break;
-        case MSG_BUDDY_T:
-            GWQ_MSG("[%"G_GINT64_FORMAT"]\n", msg->from_uin);
-            show_text_message(hqs, msg);
-        default:
-            GWQ_MSG("Unknown message type received\n");
-            break;
-    }
-    
-}
-
-static void cb_users_foreach(GWQSession* wqs, GWQUserInfo* user)
-{
-    HybridGroup* bGroup;
-    HIGWQSession *hqs;
-    char *uId;
-    
-    hqs = (HIGWQSession*)GWQSessionGetUserData(wqs);
-    
-    GWQ_MSG("qqNum:%"G_GINT64_FORMAT",\t nick:%s,\t markname:%s\n", 
-            user->qqNum, user->nick->str ,user->markname->str);
-    bGroup = hqs->hbBdGroup;
-    if (!bGroup) {
-        GWQ_ERR("Can not find default buddies group\n");
-    }
-    
-    uId = g_strdup_printf("%"G_GINT64_FORMAT, user->qqNum);
-    if (!uId) {
-        GWQ_ERR("\n");
-    } else {
-        hybrid_blist_add_buddy(hqs->hbAc, hqs->hbBdGroup, uId,
-            user->nick->str);
-        g_free(uId);
-    }
-}
-
-static void cb_update_users_info(GWQSession* wqs, void* ctx)
-{
-    HIGWQSession *hqs;
-    
-    hqs = (HIGWQSession*)ctx;
-    
-    hqs->hbBdGroup = hybrid_blist_add_group(hqs->hbAc, BUDDIES_GROUP_ID, BUDDIES_GROUP_NAME);
-    if (!hqs->hbBdGroup) {
-        GWQ_ERR("\n");
-    }
-
-    GWQSessionUsersForeach(wqs, cb_users_foreach);
-    
-    GWQ_DBG("Waiting for message\n");
-    GWQSessionDoPoll(wqs, messageRecieved);
-}
-
-static void cb_login(GWQSession* wqs, void* ctx)
-{
-    HIGWQSession *hqs;
-    GWQUserInfo *ui;
-    
-	GWQ_DBG("==>__LoginCallback()\n");
-    hqs = (HIGWQSession*)ctx;
-	if (wqs->st != GWQS_ST_IDLE) {
-		GWQ_MSG("Login failed\n");
-	} else {
-	    GWQ_MSG("Login successfully\n");
-        GWQ_MSG("Fetching buddies' information, please wait......\n");
-        
-        GWQSessionUpdateUsersInfo(&hqs->wqs, cb_update_users_info);
-        
-        ui = GWQSessionGetUserInfo(&hqs->wqs, g_ascii_strtoll(hqs->wqs.num->str, NULL, 10), -1);
-        if (ui) {
-            hybrid_account_set_nickname(hqs->hbAc, ui->nick->str);
-            GWQUserInfoFree(ui);
-        }
-        
-        hybrid_account_set_connection_status(hqs->hbAc, HYBRID_CONNECTION_CONNECTED);
-        
-	}
-}
-
 static gboolean
 hgwq_login(HybridAccount *account)
 {
@@ -221,7 +307,14 @@ hgwq_login(HybridAccount *account)
     hybrid_account_set_protocol_data(account, hqs);
     hybrid_account_set_state(hqs->hbAc, HYBRID_STATE_INVISIBLE);
     hybrid_account_set_nickname(hqs->hbAc, account->username);
-    GWQSessionLogin(&hqs->wqs, cb_login, GWQ_CHAT_ST_HIDDEN);
+    GWQSessionSetCallBack(&hqs->wqs, 
+        cb_login,
+        cb_logout,
+        cb_message_recieved,
+        cb_message_sent,
+        cb_update_qq_num_by_uin,
+        cb_update_long_nick_by_uin);
+    GWQSessionLogin(&hqs->wqs, GWQ_CHAT_ST_HIDDEN);
     return FALSE;
 }
 
@@ -334,14 +427,15 @@ hgwq_send_typing(HybridAccount *account, HybridBuddy *buddy, HybridInputState st
 
 }
 
-static void messageSentHndl(GWQSession* wqs, QQSendMsg* msg, gint32 retCode)
+static void display_sent_failed(HybridAccount *account,
+                const gchar *buddy_id, const gchar *text)
 {
-    if (retCode) {
-        GWQ_ERR("Message sent failed\n");
-    } else {
-        GWQ_MSG("Message sent OK\n");
+    char *tmpStr = g_strdup_printf(_("'%s'sent failed\n"), text);
+    if (tmpStr) {
+        hybrid_conv_got_message(account, buddy_id, tmpStr, time(NULL));
+        g_free(tmpStr);
     }
-    qq_sendmsg_free(msg);
+    return;
 }
 
 static void
@@ -350,32 +444,29 @@ hgwq_chat_send(HybridAccount *account, HybridBuddy *buddy, const gchar *text)
     HIGWQSession *hqs;
     QQSendMsg *qsm;
     QQMsgContent *qmc;
+    gint64 uin, num;
     
     hqs = hybrid_account_get_protocol_data(account);
     
-    qsm = qq_sendmsg_new(MSG_BUDDY_T,  g_ascii_strtoll(buddy->id, NULL, 10));  /* qsm should be freed with qq_sendmsg_free!! */
+    num = g_ascii_strtoll(buddy->id, NULL, 10);
+    
+    if (GWQSessionGetUinByNum(&hqs->wqs, num, &uin)) {
+        display_sent_failed(hqs->hbAc, buddy->id, text);
+        return;
+    }
+    
+    qsm = qq_sendmsg_new(MSG_BUDDY_T,  num);  /* qsm should be freed with qq_sendmsg_free!! */
 
     qmc = qq_msgcontent_new(QQ_MSG_CONTENT_STRING_T, text);
     qq_sendmsg_add_content(qsm, qmc);
     qmc = qq_msgcontent_new(QQ_MSG_CONTENT_FONT_T, "宋体", 12, "000000", 0,0,0);
     qq_sendmsg_add_content(qsm, qmc);
     
-    if (GWQSessionSendBuddyMsg(&hqs->wqs,  g_ascii_strtoll(buddy->id, NULL, 10), -1LL, qsm, messageSentHndl)) {
+    if (GWQSessionSendBuddyMsg(&hqs->wqs,  uin, qsm)) {
         GWQ_ERR("Sent failed, BUSY sending message, please try later\n");
+        display_sent_failed(hqs->hbAc, buddy->id, text);
+        qq_sendmsg_free(qsm);
     };
-}
-
-static void cb_logout(GWQSession* wqs, void* ctx)
-{
-    HIGWQSession *hqs;
-    
-    hqs = (HIGWQSession*)ctx;
-    if (wqs->st != GWQS_ST_OFFLINE) {
-		GWQ_MSG("Logout failed\n");
-	} else {
-	    GWQ_MSG("Logout success\n");
-	}
-    HIGWQSessionDestroy(hqs);
 }
 
 static void
@@ -384,7 +475,7 @@ hgwq_close(HybridAccount *account)
     HIGWQSession *hqs;
     
     hqs = hybrid_account_get_protocol_data(account);
-    GWQSessionLogOut(&hqs->wqs, cb_logout);
+    GWQSessionLogOut(&hqs->wqs);
 }
 
 HybridIMOps im_ops = {
@@ -422,7 +513,6 @@ HybridModuleInfo module_info = {
     "0","1",                    /**< major version, minor version */
     "xmpp",                     /**< icon name */
     MODULE_TYPE_IM,
-
     &im_ops,
     NULL,
     NULL,

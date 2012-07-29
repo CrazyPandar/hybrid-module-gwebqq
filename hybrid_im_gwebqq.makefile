@@ -29,7 +29,7 @@ JSON_GLIB_LIBS ?= $(shell pkg-config --libs json-glib-1.0)
 SQLITE3_CFLAGS ?= $(shell pkg-config --cflags sqlite3)
 SQLITE3_LIBS ?= $(shell pkg-config --libs sqlite3)
 
-HYBRID_CFLAGS ?= -I/usr/include/hybrid $(shell pkg-config --cflags gtk+-2.0)
+HYBRID_CFLAGS ?= -I/usr/include/hybrid -DENABLE_NLS $(shell pkg-config --cflags gtk+-2.0)
 
 LIBGWEBQQ_CFLAGS ?= -I/usr/include/libgwebqq
 LIBGWEBQQ_LIBS ?= -lgwebqq
