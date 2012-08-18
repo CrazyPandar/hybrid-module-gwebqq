@@ -40,7 +40,7 @@ else
 TARGET = libhigwebqq.so
 endif
 
-OBJS = hybrid_im_gwebqq.o
+OBJS = hybrid_module_gwebqq.o
 
 CFLAGS +=  -I./include -fPIC $(GLIB_CFLAGS) $(LIBSOUP_CFLAGS) $(JSON_GLIB_CFLAGS) $(SQLITE3_CFLAGS) $(LIBGWEBQQ_CFLAGS) $(HYBRID_CFLAGS)
 LDFLAGS += -Wl,-soname -Wl,$(TARGET) -shared -lm -lcrypt $(GLIB_LIBS) $(LIBSOUP_LIBS) $(JSON_GLIB_LIBS) $(SQLITE3_LIBS) $(LIBGWEBQQ_LIBS)

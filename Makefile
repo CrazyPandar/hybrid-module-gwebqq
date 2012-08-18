@@ -1,6 +1,6 @@
 ############### configuration #################
-PROJ_NAME = hybrid-im-gwebqq
-TARGETS = hybrid_im_gwebqq
+PROJ_NAME = hybrid-module-gwebqq
+TARGETS = hybrid_module_gwebqq
 CFLAGS += -Wall -Wno-unused-label -Wno-unused-function
 LDFLAGS += 
 #VER =
