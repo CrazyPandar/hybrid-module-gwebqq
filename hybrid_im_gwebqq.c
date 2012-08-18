@@ -115,9 +115,6 @@ void try_set_connected(HIGWQSession* hqs)
     if (hqs->gotNumCount == hqs->buddiesCount 
             && hqs->accountLongNickUpdated
             && hqs->accountDetailUpdated) {
-        GWQ_DBG("do hybrid_account_set_connection_status()\n", __FUNCTION__);
-        hybrid_account_set_connection_status(hqs->hbAc, HYBRID_CONNECTION_CONNECTED);
-        
         GWQ_DBG("Waiting for message\n");
         GWQSessionDoPoll(&hqs->wqs);
     }
@@ -177,6 +174,9 @@ static void cb_login(GWQSession* wqs, void* ctx)
 	} else {
 	    GWQ_MSG("Login successfully\n");
         GWQ_MSG("Fetching buddies' information, please wait......\n");
+        
+        GWQ_DBG("do hybrid_account_set_connection_status()\n");
+        hybrid_account_set_connection_status(hqs->hbAc, HYBRID_CONNECTION_CONNECTED);
         
         GWQSessionUpdateUsersInfo(&hqs->wqs, cb_update_users_info);
         
@@ -287,8 +287,10 @@ static void cb_update_qq_num_by_uin(GWQSession* wqs, gint64 uin, gint64 qqNum)
                 g_free(gId);
             }
             if (grp) {
+				GWQ_DBG("\n");
                 hybrid_blist_add_buddy(hqs->hbAc, grp, uId, dispName);
             } else {
+				GWQ_DBG("\n");
                 hybrid_blist_add_buddy(hqs->hbAc, hqs->hbBdGroup, uId, dispName);
             }
             g_free(uId);
@@ -466,7 +468,7 @@ hgwq_login(HybridAccount *account)
 static void
 hgwq_get_info(HybridAccount *account, HybridBuddy *buddy)
 {
-
+    
 }
 
 static gboolean
@@ -503,14 +505,12 @@ static gboolean
 hgwq_keep_alive(HybridAccount *account)
 {
 
-
     return TRUE;
 }
 
 static gboolean
 hgwq_account_tooltip(HybridAccount *account, HybridTooltipData *tip_data)
 {
-
     return TRUE;
 }
 
@@ -518,7 +518,22 @@ static gboolean
 hgwq_buddy_tooltip(HybridAccount *account, HybridBuddy *buddy,
         HybridTooltipData *tip_data)
 {
-   
+    GWQUserInfo *user;
+    HIGWQSession *hqs;
+    
+    hqs = hybrid_account_get_protocol_data(account);
+    
+    if ((user = GWQSessionGetUserInfo(&hqs->wqs, g_ascii_strtoll(buddy->id, NULL, 10), -1))) {
+        char *tmpStr;
+        
+        hybrid_tooltip_data_add_title(tip_data, user->nick);
+        tmpStr = g_strdup_printf("%"G_GINT64_FORMAT, user->qqNum);
+        hybrid_tooltip_data_add_pair(tip_data, _("QQ number"), tmpStr);
+        g_free(tmpStr);
+        hybrid_tooltip_data_add_pair(tip_data, _("Markname"), user->markname);
+        hybrid_tooltip_data_add_pair(tip_data, _("Status"), user->lnick);
+        GWQUserInfoFree(user);
+    }
     return TRUE;
 }
 
